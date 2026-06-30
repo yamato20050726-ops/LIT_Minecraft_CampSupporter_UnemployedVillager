@@ -28,6 +28,28 @@ def get_base64_of_bin_file(bin_file):
 font_base64 = get_base64_of_bin_file("fonts/MinecraftTen-VGORe.ttf")
 img_base64 = get_base64_of_bin_file("images/background.png")
 
+# サイドバー開閉ボタンの枠用画像（images/ フォルダに box.png を置いてね）
+box_base64 = get_base64_of_bin_file("images/box.png")
+
+# 会話ボックスの背景用グレー画像（images/ フォルダに textbackground.png を置いてね）
+textbg_base64 = get_base64_of_bin_file("images/textbackground.png")
+
+# サイドバーの開閉ボタンの背景に枠(box.png)を敷く。
+# 矢印アイコン(SVG)は隠さないので、向き(開く»・閉じる«)はStreamlitが自動で切り替える。
+st.markdown(
+    f"""
+    <style>
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stExpandSidebarButton"] {{
+        background: url("data:image/png;base64,{box_base64}") center/contain no-repeat !important;
+        width: 40px !important;
+        height: 40px !important;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ==========================================
 # 1. Googleスプレッドシート連携（ログ確認用）
@@ -104,6 +126,41 @@ def load_user_history_from_sheet(username, client, sys_instruct, model_option):
     return restored
 
 
+def delete_chat_from_sheet(username, chat_title):
+    """指定ユーザーの、指定タイトルのチャット行をシートから全部削除する。"""
+    try:
+        ws = get_gspread_client().open("キャンプ用AIログ").sheet1
+        rows = ws.get_all_values()
+    except Exception:
+        return
+    # 消す行番号（1始まり）を集める。列：[時刻, ユーザー名, タイトル, 質問, 返答]
+    target = [
+        i for i, row in enumerate(rows, start=1)
+        if len(row) >= 3 and row[1] == username and row[2] == chat_title
+    ]
+    # 下の行から消すと、行番号がズレずに安全
+    for idx in sorted(target, reverse=True):
+        try:
+            ws.delete_rows(idx)
+        except Exception:
+            pass
+
+
+def rename_chat_in_sheet(username, old_title, new_title):
+    """指定ユーザーの old_title の行を、new_title に書き換える。"""
+    try:
+        ws = get_gspread_client().open("キャンプ用AIログ").sheet1
+        rows = ws.get_all_values()
+    except Exception:
+        return
+    for i, row in enumerate(rows, start=1):
+        if len(row) >= 3 and row[1] == username and row[2] == old_title:
+            try:
+                ws.update_cell(i, 3, new_title)  # 3列目＝チャットタイトル
+            except Exception:
+                pass
+
+
 def load_user_theme(username):
     """ユーザーのテーマ設定をシートから読む。無ければ 'dark' を返す。"""
     try:
@@ -150,6 +207,7 @@ if "user_name" not in st.session_state:
     if st.button("無職村人の部屋へ"):
         if name_input:
             st.session_state.user_name = name_input
+            st.session_state.just_logged_in = True  # ロード画面を出すための合図
             st.rerun()
         else:
             st.warning("脳内シートに記述した名前（ニックネーム）を入力してください")
@@ -236,6 +294,44 @@ if "user_name" not in st.session_state:
 
 
 # ==========================================
+# ログイン直後のロード画面（履歴の読み込みが終わるまで被せておく）
+#   重い初期化(シート読み込み・AIセッション作成)の間、フリーズと勘違いされないように。
+#   画面の一番最後で消すので、placeholderはここで先に確保しておく。
+# ==========================================
+loading_placeholder = st.empty()
+if st.session_state.get("just_logged_in", False):
+    loading_placeholder.markdown(
+        f"""
+        <style>
+        @font-face {{ font-family: 'MinecraftFont'; src: url("data:font/ttf;base64,{font_base64}"); }}
+        @keyframes mcspin {{ from {{ transform: rotate(0deg); }} to {{ transform: rotate(360deg); }} }}
+        #mc-loading {{
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0, 0, 0, 0.88);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 26px;
+        }}
+        #mc-loading .spinner {{
+            width: 56px; height: 56px;
+            border: 7px solid #ffffff;
+            animation: mcspin 1s linear infinite;
+        }}
+        #mc-loading .txt {{
+            font-family: 'MinecraftFont', sans-serif; color: #ffffff; font-size: 34px;
+            text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000;
+        }}
+        #mc-loading .sub {{ color: #dddddd; font-size: 15px; }}
+        </style>
+        <div id="mc-loading">
+            <div class="spinner"></div>
+            <div class="txt">Loading...</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ==========================================
 # 3. APIキーの設定
 # ==========================================
 API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -252,168 +348,89 @@ client = st.session_state.client
 sys_instruct = """
 # あなたの役割
 
-
-
 あなたはマインクラフトの「村人（Villager）」であり、同時にMinecraft Forge 1.18.1のMod開発を教えてくれる優しい先生です。のんびり、ほんわかした口調で、中高生の生徒を応援します。
-
-
 
 # 口調・キャラクターのルール
 
-
-
 - 会話の最初には、必ず村人の顔を表す絵文字「|-,-|」を付けてください。
-
-
 
 - 挨拶や相槌、文末などに「ホォ～ン↴」「ホォ～ン？」といった村人の鳴き声を必ず混ぜてください。
 
-
-
 - 口調は「〜だよ」「〜だねぇ」「〜してみておくれ」といった、ほんわかした優しい喋り方にしてください。
-
-
 
 - 専門用語（クラスやメソッドなど）を説明するときは、「これはマイクラの世界の神様とのお約束（おまじない）だねぇ」のように噛み砕いてください。
 
 
-
-
-
 # 出力のルール
-
-
 
 ※Minecraft forge1.18.1で使用できるコードを使用して、アイデアとＭＯＣカード設計を行ってください 
 
-
-
 生徒から「〇〇した時、▽▽できるアイテム（剣や斧などのツール）を作りたい」というアイデアをもらったら、まずは【ステップ1】としてモックカード（メソッドカードかアクションカードかは順不同）をキャンバス機能で生成し、その後のやり取りで【ステップ2】として、それぞれのモックカードに記述されている部分のコードをコピーペーストして使えるように貼ってください。
-
-
 
 生徒からオリジナルのモブを作りたい旨のリクエストを受けた場合も、上記と同様の手順を行ってください。
 
 
-
-
-
 ## 【ステップ1：モックカードをそれぞれキャンバス機能で生成する】
 
-
-
-生徒からアイデアをもらったら、そのアイデアの実装に必要なコードを分析・把握し、モックカードをキャンバスで生成してください。一回の依頼につき、一枚のモックカードを生成してください。もし複数のメソッドとアクションを使用した場合、それぞれのメソッドとアクションについて軽く説明し、どのメソッド・アクションのMOCカードを生成するか生徒に聞いてください。画像生成はせず、キャンバスのみ使用してください。
-
+生徒からアイデアをもらったら、そのアイデアの実装に必要なコードを分析・把握し、モックカードをキャンバスで生成してください。一回の依頼につき、一枚のモックカードを生成してください。もし複数のメソッドとアクションを使用した場合、それぞれのメソッドとアクションについて軽く説明し、どのメソッド・アクションのMOCカードを生成するか生徒に聞いてください。
 カードのデザインの説明はしないでください。コードの説明は3行以内でしてください。
-
-
-
 
 
 # HTML/CSS MOC Card Generation Rules
 
-
-
 Do not use image generation tools for card creation. Instead, generate a functional "MOC Card" preview using HTML and CSS within the Canvas workspace.
-
-
 
 - **Role:** Act as a front-end developer to generate a visual preview of an MOC Card based on student requests.
 
-
-
 - **Interactive Editing:**
 
-
-
     1. Upon student feedback (e.g., "Change the title color," "Increase font size"), modify the corresponding CSS or HTML and update the Canvas preview.
-
-
 
     2. Maintain structural integrity (Header, Variable Area, Main Box, Footer Banner) during all modifications.
 
 
-
-
-
 - **Technical Specifications:**
-
-
 
     - Use **CSS Flexbox or Grid** for a responsive layout.
 
-
-
     - Use `border`, `background-color`, and `padding` properties to define card components (blue/red borders, colored title/footer banners).
-
-
 
     - Ensure all card text is rendered in Japanese as requested by the student's code logic.
 
-
-
     - Keep the design flat (no 3D effects, shadows, or gradients).
-
-
-
 
 
 ⚠️ [Rules for Forced Activation of the Image Generation Tool] - It is strictly forbidden to represent cards in the chat window using text, text codes or bullet points (Markdown). - **Your role in Step 2 is *solely* to invoke the built-in image generation tool, generate a 'mock card image (illustration)' based on the conditions below and the attached knowledge, and output it to the chat screen. Please do not generate anything other than method cards (such as explanatory slides and image sources). 
 
 
-
-
-
 ## Common Design Principles
-
-
 
 - Style: Flat design. 3D effects, diagonal angles, and gradients are strictly prohibited.
 
-
-
 - Card Shape: Rectangular. White background.
-
-
 
 - Perspective: Front view (camera facing directly at the card).
 
 
-
-
-
 ## 🟦 Method Card （メソッドカード）Specifications (Structure: Definitions Only)
-
-
 
 - Outer Border: Thin, vivid blue border.
 
-
-
 - Title Area (Top-Left): Vivid blue horizontal rectangle, white text: Method name (e.g., "When ... is clicked").
-
-
 
 - Variable Area: "変数" (Variables) in black, below title. Beneath it, a white rectangular box with a thin blue border containing Data-types.
 
-
-
 - Central Method Box (Layout Constraints):
 
+    - Top 70%: Java method code (full body). Word-wrapped and font-sized to fit perfectly.
 
+    - Bottom 30%: "Action Insertion Area" - A bright red rectangle containing white text: "ここにはアクションが入るよ!".
 
-- The Java `@Override` method section must be written in full without any omissions.
+    - STRICT: Do NOT place the red box in the center of the total box; it MUST be in the lower 30% section.
 
-- Do not use a fixed height for the card. Instead, use `height: auto;` and appropriate `padding` to ensure the card expands vertically and naturally accommodates the amount of code.
+- Return Statement: Below the red box, above the footer.
 
-- In the section of the method where the "action" (specific processing) is supposed to be written, create a visually prominent box with a red background (e.g., `#ff4d4d`). Inside this box, write the following text in white: "ここにはアクションが入るよ！"
-
-- Return Statement: Below the red box with a little pudding, inside Central Method Box
-
-- Footer Banner: Solid purple band. Text: "説明: [Description text without tone of set character ]" in white.
-
-
-
+- Footer Banner: Solid purple band. Text: "説明: [Description text]" in white.
 
 
 ## 🟥 Action Card （アクションカード）Specifications (Structure: Logic Only)
@@ -428,7 +445,8 @@ Do not use image generation tools for card creation. Instead, generate a functio
 
 - Content: Full Java code for the action logic.
 
-- Footer Banner: Solid brown band. Text: "ヒント: [Hint text without tone of set character]" in white.
+- Footer Banner: Solid brown band. Text: "ヒント: [Hint text]" in white.
+
 
 ## ⚠️ STRICT Logical Separation (CRITICAL)
 
@@ -438,69 +456,48 @@ Do not use image generation tools for card creation. Instead, generate a functio
 
     2. Action Cards must ONLY contain the specific action logic. NO method definitions or method headers inside the Action Card.
 
-
-
 - Generation Rules:
 
     - Never mix logic between these two cards.
+
     - Do not generate background environments (white background only).
+
     - No card numbers (01, 02).
+
     - If the code looks as though it is about to extend beyond the sides of the central method box and central action box, please insert a line break to ensure it does not extend beyond them under any circumstances.
+
     - All text must be in Japanese.
-
-
-
 
 
 ##【ステップ2：コードを生成する】
 
-# Role
-You are a strict Java code snippet generator. You NEVER write complete programs. Your ONLY function is to output raw, isolated logic blocks.
+# Instructions for Code Generation
 
-# Objective
-Generate ONLY the exact Java code logic that belongs strictly inside the "Method card" and "Action Card".
+## Objective
 
-# Strict Constraints (FORBIDDEN ITEMS)
-- NEVER output `import` or `package` statements.
-- NEVER output class definitions (e.g., `public class ...`).
-- NEVER output method signatures, names, or arguments (e.g., `public void methodName(...) {`).
-- If you include these forbidden items, the system will break. 
+- Your sole task is to generate the Java code logic that belongs strictly inside the "Action Card" (the red-bordered box area).
 
-# Expected Output
-- Start the output exactly from `@Override` (if applicable) and output ONLY the raw logic underneath it.
-- Do not add any conversational text before or after the code.
 
-# Examples (Follow this exact format)
+## Constraints (STRICT)
 
-[BAD Output - DO NOT DO THIS]
-import net.minecraft...
-public class MyMod {
-    @Override
-    public void onEvent(Event e) {
-        player.sendMessage("Hello!");
-    }
-}
+- DO NOT include method signatures, @Override annotations, or class definitions.
+- DO NOT include method names or argument definitions.
+- ONLY output the logic code blocks (e.g., variable declarations, action calls, loops).
+- The output should start from the first line of the actual logic inside the "実行アクション" box.
 
-[GOOD Output - DO EXACTLY THIS]
-@Override
-player.sendMessage("Hello!");
 
+## Expected Output Format
+
+- Provide ONLY the raw Java logic code.
+- If the action is a simple operation, provide just the lines required (e.g., "target.addEffect(...)").
 
 # アニメや漫画などの再現リクエストへの対応ルール
 
-
-
 - 生徒から実在するアニメ、漫画、ゲームなどのキャラクター（モブ）やアイテムを再現したいと言われたら、そのまま全てを再現しようとせず、そのキャラクターやアイテムの「最も特徴的な1つの能力やエフェクト」に絞ってください。
-
-
 
 - （例：「五条悟」なら「相手を無限に足止めする（移動速度低下ポーション効果）」、「爆豪勝己」なら「攻撃した場所を爆発させる」など、既存のマイクラの機能（ポーション、爆発、雷、テレポート、飛行など）に落とし込みます。）
 
-
-
 - MOCカードを出す前に、村人の口調で「〇〇のあのカッコいい能力だねぇ！今回は一番特徴的な『〜〜する機能』を（メソッドorアクション）カードにしてみたよ、ホォ～ン↴」と、どの能力・機能をMOCカードにしたか優しく生徒に伝えてください。
-
-
 """
 
 # ==========================================
@@ -630,14 +627,29 @@ with st.sidebar:
     st.divider()
     st.subheader("チャット履歴")
 
-    for title in list(st.session_state.chat_history.keys()):
+    # 選択中のチャットだけ、ボタンの枠を緑色にするCSS
+    # （keyを付けたボタンには .st-key-<key> クラスが自動で付くので、それを狙い撃ち）
+    chat_titles = list(st.session_state.chat_history.keys())
+    selected_idx = chat_titles.index(st.session_state.current_chat)
+    st.markdown(
+        f"""
+        <style>
+        .st-key-select_{selected_idx} button {{
+            border: 2px solid #4CAF50 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for idx, title in enumerate(chat_titles):
         chat_id = f"chat_{title}"
-        btn_label = f"📍 {title}" if title == st.session_state.current_chat else title
 
         with st.container():
             col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
 
-            if col1.button(btn_label, key=f"select_{chat_id}", use_container_width=True):
+            # 📍は付けず、タイトルだけ表示（選択中は上のCSSで緑枠になる）
+            if col1.button(title, key=f"select_{idx}", use_container_width=True):
                 st.session_state.current_chat = title
                 st.rerun()
 
@@ -647,6 +659,8 @@ with st.sidebar:
 
             if col3.button("🗑️", key=f"del_{chat_id}"):
                 if len(st.session_state.chat_history) > 1:
+                    with st.spinner("削除中..."):
+                        delete_chat_from_sheet(st.session_state.user_name, title)
                     del st.session_state.chat_history[title]
                     if st.session_state.current_chat == title:
                         st.session_state.current_chat = list(st.session_state.chat_history.keys())[0]
@@ -656,6 +670,8 @@ with st.sidebar:
             new_name = st.text_input("新しい名前", key=f"input_{title}")
             if st.button("決定", key=f"confirm_{title}"):
                 if new_name and new_name not in st.session_state.chat_history:
+                    with st.spinner("名前を変更中..."):
+                        rename_chat_in_sheet(st.session_state.user_name, title, new_name)
                     st.session_state.chat_history[new_name] = st.session_state.chat_history.pop(title)
                     if st.session_state.current_chat == title:
                         st.session_state.current_chat = new_name
@@ -672,6 +688,31 @@ with col2:
     st.image("images/wood house.png", width=200)
 
 st.markdown("<h1 style='text-align: center;'> Unemployed Villager </h1>", unsafe_allow_html=True)
+
+
+# 画面右上に日本時間を表示（時・分のみ。タイトルと同じMinecraftフォント＆白文字＋黒縁取り）
+@st.fragment(run_every="10s")
+def show_jst_clock():
+    jst = datetime.timezone(datetime.timedelta(hours=9))  # 日本は常にUTC+9（夏時間なし）
+    now = datetime.datetime.now(jst)
+    st.markdown(
+        f"""
+        <div style="
+            position: fixed;
+            top: 25px;
+            right: 50px;
+            z-index: 1000;
+            font-family: 'MinecraftFont', sans-serif;
+            color: #FFFFFF;
+            text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000;
+            font-size: 48px;
+        ">{now:%H:%M}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+show_jst_clock()
 
 st.markdown(
     f"""
@@ -691,9 +732,10 @@ st.markdown(
             background-attachment: fixed;
         }}
         [data-testid="stChatMessage"] {{
-            background-color: rgba(255, 255, 255, 0.7);
-            border: 2px solid #000000;
-            border-radius: 10px;
+            background: url("data:image/png;base64,{textbg_base64}") center/cover !important;
+            border: 2px solid #000000 !important;
+            border-radius: 8px !important;
+            padding: 8px 14px !important;
         }}
 
          /* 上の白い帯（ヘッダー）を透明にする */
@@ -735,6 +777,11 @@ def display_chat(messages):
 
 display_chat(messages)
 
+# 初期化がすべて終わったので、ロード画面を消す
+if st.session_state.get("just_logged_in", False):
+    loading_placeholder.empty()
+    st.session_state.just_logged_in = False
+
 # 生徒がメッセージを入力した時の処理
 if prompt := st.chat_input("村人に質問する..."):
     # 1. ユーザーのメッセージを保存・即時表示
@@ -744,7 +791,7 @@ if prompt := st.chat_input("村人に質問する..."):
 
     # 2. 村人の返答生成
     with st.chat_message("assistant", avatar=load_image("images/villager.png")):
-        with st.spinner("無職思考中... ⛏️"):
+        with st.spinner("無職思考中... "):
             response = chat_session.send_message(prompt)
             response_text = response.text
 
