@@ -299,7 +299,7 @@ if "user_name" not in st.session_state:
 #   画面の一番最後で消すので、placeholderはここで先に確保しておく。
 # ==========================================
 loading_placeholder = st.empty()
-if st.session_state.get("just_logged_in", False):
+if st.session_state.get("just_logged_in", False) or st.session_state.get("switching_theme", False):
     loading_placeholder.markdown(
         f"""
         <style>
@@ -520,6 +520,10 @@ if "theme_applied" not in st.session_state:
 for key, value in THEMES[st.session_state.theme].items():
     st._config.set_option(key, value)
 
+# テーマ切り替え中なら、シートに保存（重い処理なのでロード画面が出ている間に1回だけ実行）
+if st.session_state.get("switching_theme", False) and not st.session_state.theme_applied:
+    save_user_theme(st.session_state.user_name, st.session_state.theme)
+
 # 切り替え直後だけ、もう1回だけ再描画して確実に反映させる
 if not st.session_state.theme_applied:
     st.session_state.theme_applied = True
@@ -544,8 +548,8 @@ with st.sidebar:
     )
     if new_theme != st.session_state.theme:
         st.session_state.theme = new_theme
-        st.session_state.theme_applied = False  # 再適用フラグを立てる
-        save_user_theme(st.session_state.user_name, new_theme)
+        st.session_state.theme_applied = False    # 再適用フラグ
+        st.session_state.switching_theme = True   # ロード画面を出す合図（保存は次の描画で行う）
         st.rerun()
 
 
@@ -778,9 +782,11 @@ def display_chat(messages):
 display_chat(messages)
 
 # 初期化がすべて終わったので、ロード画面を消す
-if st.session_state.get("just_logged_in", False):
+# 初期化やテーマ切り替えが終わったので、ロード画面を消す
+if st.session_state.get("just_logged_in", False) or st.session_state.get("switching_theme", False):
     loading_placeholder.empty()
     st.session_state.just_logged_in = False
+    st.session_state.switching_theme = False
 
 # 生徒がメッセージを入力した時の処理
 if prompt := st.chat_input("村人に質問する..."):
